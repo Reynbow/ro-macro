@@ -10,3 +10,7 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 *.bak
+
+# Local scratch / agent debug (do not commit)
+_bisect.*
+_c[0-9]*err.txt
