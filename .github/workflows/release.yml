@@ -33,8 +33,13 @@ jobs:
         shell: pwsh
         run: |
           $ProgressPreference = 'SilentlyContinue'
-          $installer = "$env:TEMP\ahk-v2-installer.exe"
-          Invoke-WebRequest -Uri "https://www.autohotkey.com/download/ahk-v2.exe" -OutFile $installer
+          # autohotkey.com/download often returns Cloudflare challenge HTML on GitHub-hosted runners (Invoke-WebRequest fails).
+          $api = "https://api.github.com/repos/AutoHotkey/AutoHotkey/releases/latest"
+          $rel = Invoke-RestMethod -Uri $api -Headers @{ "User-Agent" = "RO-Macro-Release-CI" }
+          $asset = $rel.assets | Where-Object { $_.name -match "_setup\.exe$" } | Select-Object -First 1
+          if (-not $asset) { throw "No *_setup.exe in latest AutoHotkey release: $($rel.tag_name)" }
+          $installer = "$env:TEMP\ahk-v2-setup.exe"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $installer
           Start-Process -FilePath $installer -ArgumentList "/silent" -Wait
           $roots = @("${env:ProgramFiles}\AutoHotkey", "${env:ProgramFiles(x86)}\AutoHotkey", "${env:LocalAppData}\Programs\AutoHotkey")
           $ahk2 = $roots | ForEach-Object {
