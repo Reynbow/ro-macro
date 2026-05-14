@@ -1,0 +1,12 @@
+# Local settings (generated at runtime)
+ro_macro_settings.ini
+
+# Build output
+dist/
+*.zip
+
+# OS / editor
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.bak

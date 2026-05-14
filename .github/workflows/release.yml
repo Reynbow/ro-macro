@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sync VERSION from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $ref = "${{ github.ref_name }}"
+          if ($ref -match '^v(\d+\.\d+\.\d+)$') {
+            $v = $Matches[1]
+            Set-Content -LiteralPath "VERSION" -Value $v -NoNewline
+            Write-Host "VERSION set to $v from tag $ref"
+          } else {
+            Write-Error "Tag must be vX.Y.Z (semver). Got: $ref"
+            exit 1
+          }
+
+      - name: Install AutoHotkey v2
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $installer = "$env:TEMP\ahk-v2-installer.exe"
+          Invoke-WebRequest -Uri "https://www.autohotkey.com/download/ahk-v2.exe" -OutFile $installer
+          Start-Process -FilePath $installer -ArgumentList "/silent" -Wait
+          $roots = @("${env:ProgramFiles}\AutoHotkey", "${env:ProgramFiles(x86)}\AutoHotkey", "${env:LocalAppData}\Programs\AutoHotkey")
+          $ahk2 = $roots | ForEach-Object {
+            if (Test-Path $_) {
+              Get-ChildItem -Path $_ -Recurse -Filter Ahk2Exe.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+            }
+          } | Where-Object { $_ } | Select-Object -First 1
+          if (-not $ahk2) { throw "Ahk2Exe.exe not found after silent install." }
+          Write-Host "Found Ahk2Exe: $($ahk2.FullName)"
+          $compilerDir = Split-Path $ahk2.FullName -Parent
+          $env:Path = "$compilerDir;$((Split-Path $compilerDir -Parent));$env:Path"
+
+      - name: Build release zip
+        shell: pwsh
+        run: |
+          & "$env:GITHUB_WORKSPACE\scripts\build-release.ps1"
+
+      - name: Upload release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
