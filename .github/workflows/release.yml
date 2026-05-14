@@ -29,22 +29,34 @@ jobs:
             exit 1
           }
 
-      - name: Install AutoHotkey v2 (portable zip)
+      - name: Install AutoHotkey v2 (setup from GitHub release)
         shell: pwsh
         run: |
           $ProgressPreference = 'SilentlyContinue'
-          # Pinned URLs: autohotkey.com is Cloudflare-blocked on Actions; GitHub API hits unauthenticated rate limits.
+          # Pinned installer: avoids Cloudflare on autohotkey.com and GitHub API rate limits.
+          # Official portable .zip does not include Ahk2Exe; setup.exe does.
           $ahkTag = "v2.0.26"
           $ahkVer = "2.0.26"
-          $zipUrl = "https://github.com/AutoHotkey/AutoHotkey/releases/download/$ahkTag/AutoHotkey_$ahkVer.zip"
-          $zipPath = "$env:RUNNER_TEMP\AutoHotkey.zip"
-          Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath
-          $dest = "$env:RUNNER_TEMP\AutoHotkey"
-          if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
-          New-Item -ItemType Directory -Path $dest | Out-Null
-          Expand-Archive -LiteralPath $zipPath -DestinationPath $dest
-          $ahk2 = Get-ChildItem -LiteralPath $dest -Recurse -Filter Ahk2Exe.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $ahk2) { throw "Ahk2Exe.exe not found in portable zip (layout changed?)." }
+          $setupUrl = "https://github.com/AutoHotkey/AutoHotkey/releases/download/$ahkTag/AutoHotkey_${ahkVer}_setup.exe"
+          $setup = "$env:RUNNER_TEMP\AutoHotkey_setup.exe"
+          Invoke-WebRequest -Uri $setupUrl -OutFile $setup
+          Start-Process -FilePath $setup -ArgumentList "/silent" -Wait
+          Start-Sleep -Seconds 12
+          $roots = @(
+            "${env:ProgramFiles}\AutoHotkey",
+            "${env:ProgramFiles(x86)}\AutoHotkey",
+            "${env:LocalAppData}\Programs\AutoHotkey"
+          )
+          $ahk2 = $roots | ForEach-Object {
+            if (Test-Path $_) {
+              Get-ChildItem -Path $_ -Recurse -Filter Ahk2Exe.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+            }
+          } | Where-Object { $_ } | Select-Object -First 1
+          if (-not $ahk2) {
+            $ahk2 = Get-ChildItem -Path "$env:LocalAppData\Programs" -Recurse -Filter Ahk2Exe.exe -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+          }
+          if (-not $ahk2) { throw "Ahk2Exe.exe not found after silent install." }
           $compilerDir = $ahk2.Directory.FullName
           $ahkRoot = (Get-Item -LiteralPath $compilerDir).Parent.FullName
           Add-Content -LiteralPath $env:GITHUB_PATH -Value $compilerDir
