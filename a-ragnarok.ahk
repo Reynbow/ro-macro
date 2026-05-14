@@ -109,6 +109,7 @@ AltPassthroughSpecs := LoadAltPassthroughSpecs()
 RegisteredAltHotkeys := []
 MainToggleHotkey := LoadMainToggleHotkey()
 RegisteredMainToggleHk := ""
+global CaptureHotkeyUiActive := false
 
 SlotBehaviors := Map()
 for s in ["Q", "W", "E", "R", "Z", "X", "C", "V"]
@@ -963,6 +964,24 @@ OpenUrlBridge(url) {
         return "error"
     }
     return "ok"
+}
+
+
+SetCaptureHotkeyUiBridge(s) {
+    global CaptureHotkeyUiActive
+    t := Trim(StrLower(String(s)))
+    CaptureHotkeyUiActive := (t = "true" || t = "1" || t = "yes")
+    return "ok"
+}
+
+
+HotkeySpecWithPassthrough(spec) {
+    spec := Trim(String(spec))
+    if spec = ""
+        return spec
+    if SubStr(spec, 1, 1) = "~"
+        return spec
+    return "~" . spec
 }
 
 
@@ -1836,8 +1855,10 @@ KeyWaitKeyName(normalizedKey) {
 
 
 AltPassthroughTogglePressed(keyWaitName, *) {
-    global MacrosEnabled
+    global MacrosEnabled, CaptureHotkeyUiActive
 
+    if CaptureHotkeyUiActive
+        return
     SetMacrosEnabled(!MacrosEnabled)
     KeyWait KeyWaitKeyName(keyWaitName)
 }
@@ -2213,12 +2234,8 @@ ExitSub(ExitReason, ExitCode) {
 
 BuildWebGui() {
     global WVGui, HudX, HudY, ROMacroVersion
-
-    WVGui := WebViewGui("+AlwaysOnTop -Caption", "RO Macro v" ROMacroVersion)
-    WVGui.OnEvent("Close", (*) => (WVGui.Hide(), true))
-
-    WVGui.AddTextRoute "index.html", "
-(
+    indexHtml := "
+    (
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2308,8 +2325,10 @@ button.btn-cap:focus:not(:focus-visible) {
   outline: none;
   box-shadow: none;
 }
-.key-btn:focus:not(:focus-visible) {
+.key-btn:focus,
+.key-btn:focus-visible {
   outline: none;
+  box-shadow: none;
 }
 button.macro-main-switch:focus:not(:focus-visible),
 button.slot-mode-switch:focus:not(:focus-visible) {
@@ -2632,9 +2651,11 @@ body.macros-off .status-big {
   display: flex;
   flex-direction: column;
 }
-#viewMain:not(.hidden),
-#viewOnboarding:not(.hidden) {
+#viewMain:not(.hidden) {
   overflow-y: auto;
+}
+#viewOnboarding:not(.hidden) {
+  overflow-y: hidden;
 }
 .shell-pane.hidden {
   display: none !important;
@@ -2646,6 +2667,12 @@ body.macros-off .status-big {
   flex-direction: column;
   gap: 6px;
   min-height: 0;
+}
+/* Onboarding shares .wrap but must fill the shell height so lists scroll inside the carousel, not off-window */
+.wrap.ob-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
 }
 #viewMain {
   padding-top: 10px;
@@ -2716,6 +2743,7 @@ body.macros-off .status-big {
   font-family: inherit;
   overflow: hidden;
   transition: border-color 0.12s, background 0.12s;
+  -webkit-tap-highlight-color: transparent;
 }
 .key-btn.listening {
   border-color: rgba(96, 165, 250, 0.55);
@@ -3043,6 +3071,59 @@ body.macros-off .status-big {
 .alt-pill-kbd .kbd-chip--sm {
   margin: 0;
 }
+#obMainToggleKbdHost.ob-main-toggle-preview,
+#setMainToggleKbdHost {
+  display: inline-flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0;
+}
+.ob-main-toggle-row {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 10px;
+  min-width: 0;
+}
+.ob-main-toggle-row #obMainToggleKbdHost.ob-main-toggle-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 14px;
+  box-sizing: border-box;
+  border: 1px solid rgba(74, 222, 128, 0.45);
+  border-radius: var(--radius);
+  background: var(--accent-dim);
+}
+.ob-main-toggle-row #obMainToggleKbdHost .kbd-chip.kbd-chip--sm {
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: var(--radius-sm);
+}
+.ob-main-toggle-row #obMainToggleKbdHost .kbd-plus {
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 2px;
+  color: var(--accent);
+}
+.ob-main-toggle-row > .btn-primary {
+  flex: 0 0 auto;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
 .modal-cap {
   position: fixed;
   inset: 0;
@@ -3314,18 +3395,19 @@ body.macros-off .status-big {
   -webkit-overflow-scrolling: touch;
 }
 .ob-wrap {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   padding: 0;
-  overflow: visible;
+  min-height: 0;
+  overflow: hidden;
 }
 .ob-layout {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  height: auto;
   min-height: 0;
+  overflow: hidden;
 }
 .ob-header {
   flex-shrink: 0;
@@ -3341,7 +3423,8 @@ body.macros-off .status-big {
   letter-spacing: -0.02em;
 }
 .ob-viewport {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  min-height: 0;
   width: 100%;
   overflow: hidden;
   position: relative;
@@ -3352,7 +3435,7 @@ body.macros-off .status-big {
 .ob-track {
   display: flex;
   width: 800%;
-  height: auto;
+  height: 100%;
   align-items: stretch;
   min-height: 0;
   transition: transform 0.38s cubic-bezier(0.32, 0.72, 0, 1);
@@ -3362,22 +3445,36 @@ body.macros-off .status-big {
   flex: 0 0 calc(100% / 8);
   min-width: 0;
   min-height: 0;
-  height: auto;
+  height: 100%;
+  max-height: 100%;
   align-self: stretch;
   box-sizing: border-box;
   overflow-x: hidden;
-  overflow-y: visible;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 .ob-slide-inner {
   padding: 12px 20px 20px;
   text-align: left;
   box-sizing: border-box;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+/* Process-picker panels only (not e.g. #obMainToggleKbdHost — row layout for shortcut chips) */
+.ob-slide-inner > div[id^="obPanel"]:not(.ob-panel-hidden) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .ob-text {
   font-size: 15px;
   color: var(--muted);
   line-height: 1.5;
   margin: 0 0 14px;
+  flex-shrink: 0;
 }
 .ob-footer {
   flex-shrink: 0;
@@ -3424,7 +3521,8 @@ body.macros-off .status-big {
   display: none !important;
 }
 .ob-process-list {
-  max-height: 168px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
@@ -3483,23 +3581,30 @@ body.onboarding .titlebar-win #btnViewToggle { visibility: hidden; }
   flex-direction: row;
   align-items: stretch;
   justify-content: center;
-  gap: 6px;
+  gap: 8px;
   flex: 1;
   min-height: 100px;
+  /* Match .key-btn: 1px top border + .key block (~31px) + 1px + .label (~25px) ≈ 58px; mids from top of button */
+  --ob-tut-btn-h: 58px;
+  --ob-tut-key-mid-y: 16.5px;
+  --ob-tut-label-mid-y: 45.5px;
+  --ob-tut-arrow-half: 14px;
 }
 .ob-key-tutorial-col {
   flex: 1;
   min-width: 0;
-  position: relative;
   min-height: 92px;
+  position: relative;
 }
 .ob-key-tutorial-left {
   text-align: right;
   padding-right: 4px;
+  padding-top: 2px;
 }
 .ob-key-tutorial-right {
   text-align: left;
   padding-left: 4px;
+  padding-top: 2px;
 }
 .ob-key-tutorial-caption {
   font-size: 12px;
@@ -3510,11 +3615,24 @@ body.onboarding .titlebar-win #btnViewToggle { visibility: hidden; }
 }
 .ob-key-tutorial-left .ob-key-tutorial-caption {
   margin-left: auto;
-  margin-bottom: 6px;
+  margin-bottom: 12px;
+}
+.ob-key-tutorial-left .ob-key-tutorial-arrow {
+  position: absolute;
+  right: 4px;
+  top: calc(50% - (var(--ob-tut-btn-h) / 2) + var(--ob-tut-key-mid-y) - var(--ob-tut-arrow-half));
+}
+.ob-key-tutorial-right .ob-key-tutorial-arrow {
+  position: absolute;
+  left: 4px;
+  top: calc(50% - (var(--ob-tut-btn-h) / 2) + var(--ob-tut-label-mid-y) - var(--ob-tut-arrow-half));
 }
 .ob-key-tutorial-right .ob-key-tutorial-caption {
-  margin-top: 0;
-  margin-bottom: 6px;
+  position: absolute;
+  left: 4px;
+  top: calc(50% - (var(--ob-tut-btn-h) / 2) + var(--ob-tut-label-mid-y) + var(--ob-tut-arrow-half) + 12px);
+  margin: 0;
+  max-width: 120px;
 }
 .ob-key-tutorial-arrow {
   font-size: 28px;
@@ -3523,16 +3641,6 @@ body.onboarding .titlebar-win #btnViewToggle { visibility: hidden; }
   font-weight: 700;
   user-select: none;
   -webkit-user-select: none;
-}
-.ob-key-tutorial-left .ob-key-tutorial-arrow {
-  position: absolute;
-  right: 0;
-  top: 18px;
-}
-.ob-key-tutorial-right .ob-key-tutorial-arrow {
-  position: absolute;
-  left: 0;
-  bottom: 20px;
 }
 .ob-key-tutorial-center {
   flex: 0 0 auto;
@@ -3624,8 +3732,10 @@ body.onboarding .titlebar-win #btnViewToggle { visibility: hidden; }
         <section class="ob-slide" aria-label="Activation key">
           <div class="ob-slide-inner">
             <p class="ob-text">Ctrl+Down is the default shortcut to pause or resume all macros. You can keep it or choose your own before finishing setup.</p>
-            <div id="obMainToggleKbdHost" class="alt-pill-kbd ob-main-toggle-preview" style="margin-bottom:10px"></div>
-            <button type="button" class="btn-primary" onclick="openMainToggleCaptureForOnboarding()">Set activation shortcut</button>
+            <div class="ob-main-toggle-row">
+              <div id="obMainToggleKbdHost" class="alt-pill-kbd ob-main-toggle-preview"></div>
+              <button type="button" class="btn-primary" onclick="openMainToggleCaptureForOnboarding()">Set activation shortcut</button>
+            </div>
             <p class="ob-file-line" id="obMainToggleHint">Press Set to capture a different combo, or continue with the default.</p>
           </div>
         </section>
@@ -3644,8 +3754,8 @@ body.onboarding .titlebar-win #btnViewToggle { visibility: hidden; }
                 </button>
               </div>
               <div class="ob-key-tutorial-col ob-key-tutorial-right">
-                <p class="ob-key-tutorial-caption">Click here to toggle the hotkey on or off.</p>
                 <div class="ob-key-tutorial-arrow" aria-hidden="true">&#8592;</div>
+                <p class="ob-key-tutorial-caption">Click here to toggle the hotkey on or off.</p>
               </div>
             </div>
           </div>
@@ -4298,6 +4408,7 @@ function setSettingsOpen(on) {
   if (on && listeningSlot) {
     var s = listeningSlot;
     listeningSlot = null;
+    notifyCaptureHotkeyUi(false);
     var el = document.getElementById(obRebindButtonId(s));
     if (el) {
       el.classList.remove('listening');
@@ -4372,9 +4483,13 @@ function beginRebind(slot) {
   }
   listeningSlot = slot;
   var btn = document.getElementById(obRebindButtonId(slot));
-  if (!btn) return;
+  if (!btn) {
+    listeningSlot = null;
+    return;
+  }
   btn.classList.add('listening');
   btn.querySelector('.key').textContent = '...';
+  notifyCaptureHotkeyUi(true);
 }
 
 function eventKeyName(ev) {
@@ -4394,6 +4509,7 @@ document.addEventListener('keydown', function(ev) {
 
   var slot = listeningSlot;
   listeningSlot = null;
+  notifyCaptureHotkeyUi(false);
   var rebBtn = document.getElementById(obRebindButtonId(slot));
   if (rebBtn) rebBtn.classList.remove('listening');
 
@@ -4544,7 +4660,15 @@ function formatToggleSpecAsKbdHtml(spec, small) {
   return html;
 }
 
+function notifyCaptureHotkeyUi(active) {
+  try {
+    if (window.ahk && window.ahk.global && window.ahk.global.SetCaptureHotkeyUiBridge)
+      window.ahk.global.SetCaptureHotkeyUiBridge(active ? 'true' : 'false');
+  } catch (e0) {}
+}
+
 function closeAltHotkeyCapture() {
+  notifyCaptureHotkeyUi(false);
   window.altHotkeyCaptureActive = false;
   window.altCaptureTargetRow = null;
   window.altCapturePendingSpec = null;
@@ -4588,6 +4712,7 @@ function openAltHotkeyCapture(row) {
   }
   var card = document.querySelector('.modal-cap-card');
   if (card) card.focus();
+  notifyCaptureHotkeyUi(true);
 }
 
 function openMainToggleHotkeyCapture() {
@@ -4614,6 +4739,7 @@ function openMainToggleHotkeyCapture() {
   }
   var card = document.querySelector('.modal-cap-card');
   if (card) card.focus();
+  notifyCaptureHotkeyUi(true);
 }
 
 function openMainToggleCaptureForOnboarding() {
@@ -4639,6 +4765,7 @@ function openMainToggleCaptureForOnboarding() {
   }
   var card = document.querySelector('.modal-cap-card');
   if (card) card.focus();
+  notifyCaptureHotkeyUi(true);
 }
 
 function altAhkSpecUsedElsewhere(ahk, row) {
@@ -5127,7 +5254,10 @@ ahk.global.GetStateJSON().then(function(json) {
 </script>
 </body>
 </html>
-)"
+    )"
+    WVGui := WebViewGui("+AlwaysOnTop -Caption", "RO Macro v" ROMacroVersion)
+    WVGui.OnEvent("Close", (*) => (WVGui.Hide(), true))
+    WVGui.AddTextRoute("index.html", indexHtml)
 
     WVGui.Navigate("index.html")
     WVGui.Show(Format("x{1} y{2} w380 h354 NA", HudX, HudY))
@@ -5135,13 +5265,15 @@ ahk.global.GetStateJSON().then(function(json) {
     RomSyncNativeTitle()
     SetTimer(RefreshElementOverlayGuis, -400)
     SetTimer(RefreshGameServerPing, -1500)
-    SetTimer () => RomCheckForUpdateNow(), -6000
+    SetTimer(() => RomCheckForUpdateNow(), -6000)
 }
 
 
 MainToggleHotkeyHandler(*) {
-    global MacrosEnabled
+    global MacrosEnabled, CaptureHotkeyUiActive
 
+    if CaptureHotkeyUiActive
+        return
     SetMacrosEnabled(!MacrosEnabled)
 }
 
@@ -5157,14 +5289,16 @@ RegisterMainToggleHotkey() {
     if hk = ""
         hk := "^Down"
     MainToggleHotkey := hk
+    hkReg := HotkeySpecWithPassthrough(hk)
     try {
-        Hotkey hk, MainToggleHotkeyHandler, "On"
-        RegisteredMainToggleHk := hk
+        Hotkey hkReg, MainToggleHotkeyHandler, "On"
+        RegisteredMainToggleHk := hkReg
     } catch {
         MainToggleHotkey := "^Down"
+        hkReg := HotkeySpecWithPassthrough(MainToggleHotkey)
         try {
-            Hotkey MainToggleHotkey, MainToggleHotkeyHandler, "On"
-            RegisteredMainToggleHk := MainToggleHotkey
+            Hotkey hkReg, MainToggleHotkeyHandler, "On"
+            RegisteredMainToggleHk := hkReg
         }
     }
 }
@@ -5207,8 +5341,8 @@ RegisterMacroHotkey(slot) {
         return
 
     criteria := 'MacroHotkeyAllowed("' slot '")'
-    behavior := SlotBehaviors.Has(slot) ? SlotBehaviors[slot] : "spam"
-    spec := (behavior = "enter_after" ? "~$*" : "$*") key
+    ; ~ = pass native key to the game/client as well as run this handler; $* = hook + all modifiers
+    spec := "~$*" . key
     HotIf criteria
     try Hotkey spec, MacroHotkeyPressed.Bind(slot), "On"
     HotIf
@@ -5230,8 +5364,10 @@ UnregisterMacroHotkey(slot) {
 
 
 MacroHotkeyAllowed(slot) {
-    global MacrosEnabled, TargetProcess, KeyBindings
+    global MacrosEnabled, TargetProcess, KeyBindings, CaptureHotkeyUiActive
 
+    if CaptureHotkeyUiActive
+        return false
     if !(MacrosEnabled && IsKeyEnabled(slot) && WinActive("ahk_exe " TargetProcess))
         return false
 
