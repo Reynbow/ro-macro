@@ -32,7 +32,7 @@ Output:
 - `dist\RO-Macro-windows-<version>\` — folder to zip or ship as-is: **`RO-Macro.exe`**, **`Lib\`**, **`VERSION`**, and **`assets\`** (if present).
 - `dist\RO-Macro-windows-<version>.zip` — convenience archive.
 
-Prerequisites: AutoHotkey v2 installed so **`Ahk2Exe.exe`** and **`AutoHotkey64.bin`** (or `.exe` base) are found under Program Files or LocalAppData.
+Prerequisites: AutoHotkey v2 installed so **`Ahk2Exe.exe`** and **`AutoHotkey64.exe`** (base binary) are present. The script does **not** use Ahk2Exe’s MPRESS option (that would require a separate `MPRESS.exe` in the Compiler folder and shows a prompt if missing).
 
 ## GitHub Releases (CI)
 
