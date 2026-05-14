@@ -29,28 +29,22 @@ jobs:
             exit 1
           }
 
-      - name: Install AutoHotkey v2 (portable zip from GitHub)
+      - name: Install AutoHotkey v2 (portable zip)
         shell: pwsh
         run: |
           $ProgressPreference = 'SilentlyContinue'
-          # 1) autohotkey.com is often Cloudflare-blocked on Actions.
-          # 2) Silent setup.exe may not leave Ahk2Exe where our script searches on hosted runners.
-          # Portable .zip from GitHub releases is reliable and includes Compiler\Ahk2Exe.exe.
-          $api = "https://api.github.com/repos/AutoHotkey/AutoHotkey/releases/latest"
-          $rel = Invoke-RestMethod -Uri $api -Headers @{ "User-Agent" = "RO-Macro-Release-CI" }
-          $zip = $rel.assets | Where-Object { $_.name -match '^AutoHotkey_2\.\d+\.\d+\.zip$' } | Select-Object -First 1
-          if (-not $zip) {
-            $zip = $rel.assets | Where-Object { $_.name -like 'AutoHotkey_*.zip' } | Select-Object -First 1
-          }
-          if (-not $zip) { throw "No portable .zip in AutoHotkey release $($rel.tag_name)" }
+          # Pinned URLs: autohotkey.com is Cloudflare-blocked on Actions; GitHub API hits unauthenticated rate limits.
+          $ahkTag = "v2.0.26"
+          $ahkVer = "2.0.26"
+          $zipUrl = "https://github.com/AutoHotkey/AutoHotkey/releases/download/$ahkTag/AutoHotkey_$ahkVer.zip"
           $zipPath = "$env:RUNNER_TEMP\AutoHotkey.zip"
-          Invoke-WebRequest -Uri $zip.browser_download_url -OutFile $zipPath
+          Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath
           $dest = "$env:RUNNER_TEMP\AutoHotkey"
           if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
           New-Item -ItemType Directory -Path $dest | Out-Null
           Expand-Archive -LiteralPath $zipPath -DestinationPath $dest
           $ahk2 = Get-ChildItem -LiteralPath $dest -Recurse -Filter Ahk2Exe.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $ahk2) { throw "Ahk2Exe.exe not found inside $($zip.name)" }
+          if (-not $ahk2) { throw "Ahk2Exe.exe not found in portable zip (layout changed?)." }
           $compilerDir = $ahk2.Directory.FullName
           $ahkRoot = (Get-Item -LiteralPath $compilerDir).Parent.FullName
           Add-Content -LiteralPath $env:GITHUB_PATH -Value $compilerDir
