@@ -60,8 +60,7 @@ EnterConfirmDelay := LoadEnterConfirmDelay()
 ; Example: 5 means each delay can vary by -5ms to +5ms.
 SpamJitter := IniIntTiming("SpamJitter", 5)
 
-; After first key send, wait this long before spam timers start (helps in-game chat).
-SpamHoldDelayMs := IniIntTiming("SpamHoldDelayMs", 100)
+; After first key send, spam loop starts immediately (no extra hold delay).
 
 TargetProcess := IniRead(SettingsFile, "Timing", "TargetProcess", "dw-ro.exe")
 HudX := IniRead(SettingsFile, "HUD", "X", 20)
@@ -101,10 +100,10 @@ if FileExist(SettingsFile)
 else
     OnboardingNeeded := true
 
-AltPassthroughSpecs := LoadAltPassthroughSpecs()
-RegisteredAltHotkeys := []
 MainToggleHotkey := LoadMainToggleHotkey()
 RegisteredMainToggleHk := ""
+EnterTogglesMacros := IniBool("Input", "EnterTogglesMacros", false)
+RegisteredEnterToggleHotif := false
 global CaptureHotkeyUiActive := false
 
 SlotBehaviors := Map()
@@ -114,8 +113,8 @@ for s in ["Q", "W", "E", "R", "Z", "X", "C", "V"]
 BuildTray()
 BuildWebGui()
 RegisterMacroHotkeys()
-RegisterAltPassthroughHotkeys()
 RegisterMainToggleHotkey()
+RegisterEnterMacroToggleHotkey()
 OnMessage 0x0003, ElementOverlayOnWinMove
 SetTimer SaveHudPosition, 1000
 SetTimer RefreshGameServerPing, GamePingRefreshIntervalMs
@@ -288,7 +287,7 @@ TryPasteNaviToGame(*) {
 ShowHud(*) {
     global WVGui, HudX, HudY
 
-    try WVGui.Show(Format("x{1} y{2} w380 h331 NA", HudX, HudY))
+    try WVGui.Show(Format("x{1} y{2} w380 h341 NA", HudX, HudY))
     ApplyHudAlwaysOnTop()
     ElementOverlayRaiseAll()
 }
@@ -670,7 +669,7 @@ FinishOnboardingBridge(jsonStr) {
     SaveMainToggleToIni()
     OnboardingNeeded := false
     RegisterMainToggleHotkey()
-    RegisterAltPassthroughHotkeys()
+    RegisterEnterMacroToggleHotkey()
     RegisterMacroHotkeys()
     UpdateTray()
     PushState()
@@ -755,11 +754,12 @@ StopKeySpam(key) {
 GetStateJSON() {
     global MacrosEnabled, QMacroEnabled, WMacroEnabled, EMacroEnabled, RMacroEnabled
     global ZMacroEnabled, XMacroEnabled, CMacroEnabled, VMacroEnabled
-    global SpamDelay, SpamJitter, EnterConfirmDelay, SpamHoldDelayMs, TargetProcess, KeyBindings
-    global ZenBrowserExe, NaviClipboardEnabled, NaviRequireZen, AltPassthroughSpecs, SlotBehaviors
+    global SpamDelay, SpamJitter, EnterConfirmDelay, TargetProcess, KeyBindings
+    global ZenBrowserExe, NaviClipboardEnabled, NaviRequireZen, SlotBehaviors
     global OnboardingNeeded, MainToggleHotkey, ElementOverlayEnabled
     global GamePingLastMs, GamePingLastHost
     global HudAlwaysOnTop, ElementOverlayBoxPx
+    global EnterTogglesMacros
 
     s := '{"needsOnboarding":' JsonBool(OnboardingNeeded)
         . ',"macrosEnabled":' JsonBool(MacrosEnabled)
@@ -794,7 +794,7 @@ GetStateJSON() {
         . ',"spamJitter":' SpamJitter
         . ',"enterConfirmDelay":' EnterConfirmDelay
         . ',"rConfirmDelay":' EnterConfirmDelay
-        . ',"spamHoldDelayMs":' SpamHoldDelayMs
+        . ',"enterTogglesMacros":' JsonBool(EnterTogglesMacros)
         . ',"targetProcess":' EscJSON(TargetProcess)
         . ',"gamePingMs":' (GamePingLastMs = "" ? "null" : Integer(GamePingLastMs))
         . ',"gamePingHost":' EscJSON(GamePingLastHost = "" ? "" : GamePingLastHost)
@@ -816,16 +816,8 @@ GetStateJSON() {
         . ',"overlayGhost":' JsonBool(ElementOverlayEnabled["Ghost"])
         . ',"overlayShadow":' JsonBool(ElementOverlayEnabled["Shadow"])
         . ',"overlayHoly":' JsonBool(ElementOverlayEnabled["Holy"])
-        . ',"altPassthrough":['
-
-    first := true
-    for spec in AltPassthroughSpecs {
-        if !first
-            s .= ","
-        first := false
-        s .= EscJSON(spec)
-    }
-    return s "]}"
+        . '}'
+    return s
 }
 
 
@@ -1268,7 +1260,7 @@ ElementOverlayReadSavedPos(name, &outX, &outY) {
 ElementOverlayDefaultPos(stackIdx) {
     global WVGui, HudX, HudY, ElementOverlayBoxPx
     gw := 380
-    gh := 331
+    gh := 341
     gx := HudX
     gy := HudY
     if IsObject(WVGui) {
@@ -1599,44 +1591,6 @@ SaveSlotBehaviors() {
 }
 
 
-LoadAltPassthroughSpecs() {
-    global SettingsFile
-
-    s := Trim(IniRead(SettingsFile, "AltPassthrough", "Specs", "!e|!q|!z"))
-    if s = ""
-        s := "!e|!q|!z"
-    arr := []
-    for part in StrSplit(s, "|") {
-        p := Trim(part)
-        if p != ""
-            arr.Push(p)
-    }
-    if arr.Length = 0
-        arr := ["!e", "!q", "!z"]
-    return arr
-}
-
-
-SaveAltPassthroughSpecs() {
-    global SettingsFile, AltPassthroughSpecs
-
-    s := ""
-    first := true
-    for spec in AltPassthroughSpecs {
-        spec := Trim(String(spec))
-        if spec = ""
-            continue
-        if !first
-            s .= "|"
-        first := false
-        s .= spec
-    }
-    if s = ""
-        s := "!e|!q|!z"
-    IniWrite s, SettingsFile, "AltPassthrough", "Specs"
-}
-
-
 LoadMainToggleHotkey() {
     global SettingsFile
 
@@ -1671,57 +1625,10 @@ SaveMainToggleToIni() {
 }
 
 
-PassthroughSpecBlocksSlot(spec, slotKeyLower) {
-    rest := Trim(String(spec))
-    if rest = ""
-        return false
+SaveEnterToggleToIni() {
+    global SettingsFile, EnterTogglesMacros
 
-    wantAlt := false
-    wantCtrl := false
-    wantShift := false
-    wantWin := false
-
-    while SubStr(rest, 1, 1) ~= "[!^+#]" {
-        c := SubStr(rest, 1, 1)
-        switch c {
-            case "!":
-                wantAlt := true
-            case "^":
-                wantCtrl := true
-            case "+":
-                wantShift := true
-            case "#":
-                wantWin := true
-        }
-        rest := SubStr(rest, 2)
-    }
-
-    trig := StrLower(NormalizeHotkeyName(Trim(rest)))
-    if trig = "" || trig != slotKeyLower
-        return false
-
-    if wantAlt && !GetKeyState("Alt", "P")
-        return false
-    if wantCtrl && !GetKeyState("Ctrl", "P")
-        return false
-    if wantShift && !GetKeyState("Shift", "P")
-        return false
-    if wantWin && !GetKeyState("LWin", "P") && !GetKeyState("RWin", "P")
-        return false
-
-    return true
-}
-
-
-IsPassthroughComboBlockingSlot(slot) {
-    global AltPassthroughSpecs, KeyBindings
-
-    slotKey := StrLower(KeyBindings[slot])
-    for spec in AltPassthroughSpecs {
-        if PassthroughSpecBlocksSlot(spec, slotKey)
-            return true
-    }
-    return false
+    IniWrite EnterTogglesMacros ? 1 : 0, SettingsFile, "Input", "EnterTogglesMacros"
 }
 
 
@@ -1788,54 +1695,12 @@ RunSpamLoopForSlot(slot, key, spamBaseDelay) {
 }
 
 
-AltPassthroughTogglePressed(keyWaitName, *) {
-    global MacrosEnabled, CaptureHotkeyUiActive
-
-    if CaptureHotkeyUiActive
-        return
-    SetMacrosEnabled(!MacrosEnabled)
-    KeyWait KeyWaitKeyName(keyWaitName)
-}
-
-
-RegisterAltPassthroughHotkeys() {
-    global AltPassthroughSpecs, RegisteredAltHotkeys, MainToggleHotkey
-
-    for item in RegisteredAltHotkeys {
-        try Hotkey item["hk"], "Off"
-    }
-    RegisteredAltHotkeys := []
-
-    mainL := Trim(StrLower(MainToggleHotkey))
-    for spec in AltPassthroughSpecs {
-        spec := Trim(String(spec))
-        if spec = ""
-            continue
-        if mainL != "" && Trim(StrLower(spec)) = mainL
-            continue
-
-        rest := spec
-        while SubStr(rest, 1, 1) ~= "[!^+#]"
-            rest := SubStr(rest, 2)
-        waitKey := NormalizeHotkeyName(Trim(rest))
-        if waitKey = ""
-            continue
-
-        hk := "~" . spec
-        fn := AltPassthroughTogglePressed.Bind(KeyWaitKeyName(waitKey))
-        try {
-            Hotkey hk, fn, "On"
-            RegisteredAltHotkeys.Push({ hk: hk, fn: fn })
-        }
-    }
-}
-
-
 SaveSettingsBridge(jsonStr) {
     global SettingsFile
-    global SpamDelay, SpamJitter, EnterConfirmDelay, SpamHoldDelayMs, TargetProcess
-    global ZenBrowserExe, NaviClipboardEnabled, NaviRequireZen, AltPassthroughSpecs, SlotBehaviors
+    global SpamDelay, SpamJitter, EnterConfirmDelay, TargetProcess
+    global ZenBrowserExe, NaviClipboardEnabled, NaviRequireZen, SlotBehaviors
     global MainToggleHotkey, ElementOverlayEnabled, HudAlwaysOnTop, ElementOverlayBoxPx
+    global EnterTogglesMacros
 
     try data := JsonParseSimple(String(jsonStr))
     catch
@@ -1847,7 +1712,9 @@ SaveSettingsBridge(jsonStr) {
         EnterConfirmDelay := Max(0, ToIntSafe(data, "enterConfirmDelay", EnterConfirmDelay))
     else if data.Has("rConfirmDelay")
         EnterConfirmDelay := Max(0, ToIntSafe(data, "rConfirmDelay", EnterConfirmDelay))
-    SpamHoldDelayMs := Max(0, ToIntSafe(data, "spamHoldDelayMs", SpamHoldDelayMs))
+
+    if data.Has("enterTogglesMacros")
+        EnterTogglesMacros := data["enterTogglesMacros"] ? true : false
 
     tp := Trim(String(data.Has("targetProcess") ? data["targetProcess"] : TargetProcess))
     if tp != ""
@@ -1873,41 +1740,8 @@ SaveSettingsBridge(jsonStr) {
         ElementOverlayBoxPx := v
     }
 
-    newSpecs := []
-    if data.Has("altPassthrough") && data["altPassthrough"] is Array {
-        for spec in data["altPassthrough"] {
-            t := Trim(String(spec))
-            if t != ""
-                newSpecs.Push(t)
-        }
-    }
-    if newSpecs.Length = 0
-        newSpecs := ["!e", "!q", "!z"]
     if data.Has("mainToggleHotkey")
         MainToggleHotkey := NormalizeMainToggleSpec(data["mainToggleHotkey"])
-    mainL := Trim(StrLower(MainToggleHotkey))
-    seen := Map()
-    filtered := []
-    for spec in newSpecs {
-        t := Trim(String(spec))
-        if t = "" || seen.Has(t)
-            continue
-        if mainL != "" && StrLower(t) = mainL
-            continue
-        seen[t] := true
-        filtered.Push(t)
-    }
-    if filtered.Length = 0 {
-        for spec in ["!e", "!q", "!z"] {
-            t := Trim(String(spec))
-            if mainL != "" && StrLower(t) = mainL
-                continue
-            filtered.Push(t)
-        }
-    }
-    if filtered.Length = 0
-        filtered.Push("!e")
-    AltPassthroughSpecs := filtered
 
     for smSlot in ["Q", "W", "E", "R", "Z", "X", "C", "V"] {
         mk := "slotMode" . smSlot
@@ -1923,11 +1757,12 @@ SaveSettingsBridge(jsonStr) {
 
     SaveTimingToIni()
     SaveMainToggleToIni()
-    SaveAltPassthroughSpecs()
+    SaveEnterToggleToIni()
     SaveSlotBehaviors()
     SaveNaviState()
     RegisterMainToggleHotkey()
-    RegisterAltPassthroughHotkeys()
+    RegisterEnterMacroToggleHotkey()
+    try IniDelete SettingsFile, "AltPassthrough"
     ; Do not RegisterMacroHotkeys() here: settings autosave runs often (timing, overlays, etc.).
     ; Macro slot specs come from KeyBindings, which this bridge does not change — re-registering
     ; on every save only churns the hook and can contribute to missed keys / stopped spam.
@@ -1976,7 +1811,7 @@ JsonUnescape(s) {
 
 
 JsonParseSimple(json) {
-    ; Parse JSON from JS JSON.stringify: string keys, string/number/boolean values, altPassthrough string[].
+    ; Parse JSON from JS JSON.stringify: string keys, string/number/boolean values (ignores legacy altPassthrough).
     o := Map()
     json := Trim(json)
     if SubStr(json, 1, 1) != "{" || SubStr(json, -1) != "}"
@@ -2016,9 +1851,8 @@ JsonParseSimple(json) {
 
         if key = "altPassthrough" {
             if SubStr(json, pos, 1) != "["
-                throw Error("bad altPassthrough")
+                throw Error("bad json")
             pos += 1
-            o["altPassthrough"] := []
             while pos <= len {
                 while pos <= len && InStr(" `t`r`n,", SubStr(json, pos, 1))
                     pos += 1
@@ -2027,7 +1861,7 @@ JsonParseSimple(json) {
                     break
                 }
                 if SubStr(json, pos, 1) != '"'
-                    throw Error("bad altPassthrough elem")
+                    throw Error("bad json")
                 pos += 1
                 es := pos
                 while pos <= len {
@@ -2040,9 +1874,7 @@ JsonParseSimple(json) {
                         break
                     pos += 1
                 }
-                elem := SubStr(json, es, pos - es)
                 pos += 1
-                o["altPassthrough"].Push(JsonUnescape(elem))
             }
             while pos <= len && InStr(" `t`r`n,", SubStr(json, pos, 1))
                 pos += 1
@@ -2079,20 +1911,18 @@ JsonParseSimple(json) {
             pos += 1
     }
 
-    if !o.Has("altPassthrough")
-        o["altPassthrough"] := ["!e", "!q", "!z"]
     return o
 }
 
 
 SaveTimingToIni() {
-    global SettingsFile, SpamDelay, SpamJitter, EnterConfirmDelay, SpamHoldDelayMs, TargetProcess
+    global SettingsFile, SpamDelay, SpamJitter, EnterConfirmDelay, TargetProcess
 
     IniWrite SpamDelay, SettingsFile, "Timing", "SpamDelay"
     IniWrite SpamJitter, SettingsFile, "Timing", "SpamJitter"
     IniWrite EnterConfirmDelay, SettingsFile, "Timing", "EnterConfirmDelay"
-    IniWrite SpamHoldDelayMs, SettingsFile, "Timing", "SpamHoldDelayMs"
     IniWrite TargetProcess, SettingsFile, "Timing", "TargetProcess"
+    try IniDelete SettingsFile, "Timing", "SpamHoldDelayMs"
 }
 
 
@@ -2118,7 +1948,6 @@ SaveState() {
     IniWrite KeyBindings["C"], SettingsFile, "Bindings", "C"
     IniWrite KeyBindings["V"], SettingsFile, "Bindings", "V"
     SaveTimingToIni()
-    SaveAltPassthroughSpecs()
     SaveSlotBehaviors()
 }
 
@@ -2323,6 +2152,41 @@ body.macros-off .status-hero {
   gap: 14px;
 }
 .status-hero-copy { min-width: 0; }
+.main-toggle-hud-row {
+  margin-top: 4px;
+}
+.main-toggle-hud-card {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--pill-r);
+  background: var(--pill);
+  box-sizing: border-box;
+}
+.main-toggle-hud-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.main-toggle-hud-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.main-toggle-hud-kbd {
+  flex: 0 0 auto;
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0;
+}
 .status-eyebrow {
   color: var(--dim);
   font-size: 10px;
@@ -2799,6 +2663,18 @@ body.macros-off .status-big {
   flex: 0 0 auto;
   padding-top: 1px;
 }
+.settings-hud-top-field .settings-hud-top-actions {
+  flex: 0 0 auto;
+  padding-top: 1px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+.settings-hud-top-field .settings-hud-top-actions .settings-main-toggle-row {
+  justify-content: flex-end;
+  margin: 0;
+}
 .settings-autosave-hint {
   font-size: 11px;
   color: var(--dim);
@@ -2920,48 +2796,13 @@ body.macros-off .status-big {
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
-.alt-spec-row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
+.element-overlay-size-field {
+  margin-top: 8px;
+  margin-bottom: 2px;
 }
-.alt-spec-ahk {
-  display: none;
-}
-.alt-spec-kbd-host {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 6px;
-}
-.alt-spec-row .alt-spec-set,
-.alt-spec-row .alt-spec-rm {
-  flex-shrink: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
-  background: var(--btn-lo);
-  color: var(--muted);
-  font: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.alt-spec-row .alt-spec-set:hover {
-  color: var(--accent);
-  border-color: rgba(74, 222, 128, 0.45);
-}
-.alt-spec-row .alt-spec-rm:hover {
-  color: var(--danger);
-  border-color: rgba(251, 113, 133, 0.45);
-}
-.alt-spec-row .alt-spec-set:focus,
-.alt-spec-row .alt-spec-rm:focus,
-.alt-spec-row .alt-spec-set:focus-visible,
-.alt-spec-row .alt-spec-rm:focus-visible {
-  outline: none;
+.element-overlay-size-field label {
+  display: block;
+  margin-bottom: 4px;
 }
 .kbd-chip {
   display: inline-flex;
@@ -2996,7 +2837,8 @@ body.macros-off .status-big {
   margin: 0;
 }
 #obMainToggleKbdHost.ob-main-toggle-preview,
-#setMainToggleKbdHost {
+#setMainToggleKbdHost,
+#mainToggleKbdHost {
   display: inline-flex;
   flex-direction: row;
   flex-wrap: nowrap;
@@ -3711,8 +3553,13 @@ body.onboarding .titlebar-win #btnViewToggle { visibility: hidden; }
     </div>
   </section>
 
-    <div class="row">
-    <div class="pill" id="togglePills"></div>
+  <div class="row main-toggle-hud-row">
+    <div class="main-toggle-hud-card">
+      <div class="main-toggle-hud-text">
+        <div class="main-toggle-hud-label">Macro toggle</div>
+      </div>
+      <div class="main-toggle-hud-kbd alt-pill-kbd" id="mainToggleKbdHost" aria-label="Macro toggle shortcut"></div>
+    </div>
   </div>
 
   <div class="key-grid">
@@ -3756,14 +3603,46 @@ body.onboarding .titlebar-win #btnViewToggle { visibility: hidden; }
       <div class="seg val shrink" id="delayKeyPress">80 ms</div>
       <div class="seg label shrink">Jitter</div>
       <div class="seg val shrink" id="jitterVal">±5 ms</div>
-      <div class="seg label shrink">Hold</div>
-      <div class="seg val shrink" id="delayHold">100 ms</div>
     </div>
   </div>
 </main>
 
 <div id="viewSettings" class="wrap shell-pane hidden">
     <div class="settings-scroll">
+      <div class="settings-field settings-hud-top-field">
+        <div class="settings-hud-top-head">
+          <div class="settings-hud-top-copy">
+            <span class="settings-inline-label">Primary macro toggle</span>
+            <div class="help">Keyboard shortcut that pauses or resumes every slot. Default is Ctrl+Down. Click Set, press your combo, then Confirm.</div>
+          </div>
+          <div class="settings-hud-top-switch settings-hud-top-actions">
+            <input type="hidden" id="setMainToggleAhk" value="">
+            <div class="settings-main-toggle-row">
+              <div id="setMainToggleKbdHost" class="alt-pill-kbd"></div>
+              <button type="button" class="btn-primary" onclick="openMainToggleHotkeyCapture()">Set</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="settings-field settings-hud-top-field">
+        <div class="settings-hud-top-head">
+          <div class="settings-hud-top-copy">
+            <span class="settings-inline-label">Enter toggles macros</span>
+            <div class="help">While the target game window is focused, Enter turns macros on or off. Enter still reaches the game.</div>
+          </div>
+          <div class="settings-hud-top-switch">
+            <button type="button" class="macro-main-switch is-off" id="setEnterTogglesMacrosSwitch" onclick="toggleEnterTogglesMacrosSwitch()" title="Enter key toggles macros when game is focused" role="switch" aria-checked="false">
+              <span class="switch-hit switch-hit-left" aria-hidden="true"></span>
+              <span class="switch-hit switch-hit-right" aria-hidden="true"></span>
+              <span class="macro-switch-thumb" aria-hidden="true"></span>
+              <span class="macro-switch-words">
+                <span class="macro-switch-word macro-sw-on">ON</span>
+                <span class="macro-switch-word macro-sw-off">OFF</span>
+              </span>
+            </button>
+          </div>
+        </div>
+      </div>
       <div class="settings-field settings-hud-top-field">
         <div class="settings-hud-top-head">
           <div class="settings-hud-top-copy">
@@ -3783,25 +3662,16 @@ body.onboarding .titlebar-win #btnViewToggle { visibility: hidden; }
           </div>
         </div>
       </div>
-      <div class="settings-field">
-        <label for="setElementOverlayBoxPx">Element overlay tile size (pixels)</label>
-        <input type="number" id="setElementOverlayBoxPx" min="24" max="400" step="1">
-        <div class="help">Square width and height for each element tile on the screen (24–400). Updates apply automatically. Small previews below stay the same size.</div>
-      </div>
-      <div class="settings-field">
-        <label for="setSpamDelay">Key Press Delay (ms)</label>
-        <input type="number" id="setSpamDelay" min="10" step="1">
-        <div class="help">Milliseconds between repeated key sends while you hold any slot set to Spam key. All spam slots share this value. Slots set to Wait, then Enter use Enter-after wait instead, not this delay.</div>
-      </div>
       <div class="settings-row2">
+        <div class="settings-field">
+          <label for="setSpamDelay">Key press delay (ms)</label>
+          <input type="number" id="setSpamDelay" min="10" step="1">
+          <div class="help">Time between each repeated send while a Spam slot is held.</div>
+        </div>
         <div class="settings-field">
           <label for="setJitter">Jitter (±ms)</label>
           <input type="number" id="setJitter" min="0" step="1">
-        </div>
-        <div class="settings-field">
-          <label for="setHoldDelay">Spam hold delay (ms)</label>
-          <input type="number" id="setHoldDelay" min="0" step="1">
-          <div class="help">One normal send, wait, then rapid repeat while held.</div>
+          <div class="help">Random variation added to each delay.</div>
         </div>
       </div>
       <div class="settings-field">
@@ -3823,40 +3693,27 @@ body.onboarding .titlebar-win #btnViewToggle { visibility: hidden; }
           <span>V</span><button type="button" class="slot-mode-switch is-spam" id="slotModeSwitchV" onclick="toggleSlotBehavior('V')" title="V: Spam or Enter" role="switch" aria-checked="true"><span class="switch-hit switch-hit-left" aria-hidden="true"></span><span class="switch-hit switch-hit-right" aria-hidden="true"></span><span class="slot-switch-thumb" aria-hidden="true"></span><span class="slot-switch-words"><span class="slot-switch-word slot-sw-spam">Spam</span><span class="slot-switch-word slot-sw-enter">Enter</span></span></button>
         </div>
       </div>
-      <div class="settings-field">
-        <label for="setTargetExe">Target process</label>
-        <input type="text" id="setTargetExe" autocomplete="off">
-        <div class="help">Executable file name, e.g. dw-ro.exe</div>
-      </div>
-      <div class="settings-field">
-        <label for="setZenExe">Web browser exe</label>
-        <input type="text" id="setZenExe" autocomplete="off">
+      <div class="settings-row2">
+        <div class="settings-field">
+          <label for="setTargetExe">Target process</label>
+          <input type="text" id="setTargetExe" autocomplete="off">
+          <div class="help">Executable name, e.g. dw-ro.exe</div>
+        </div>
+        <div class="settings-field">
+          <label for="setZenExe">Web browser</label>
+          <input type="text" id="setZenExe" autocomplete="off">
+          <div class="help">Exe name for Navi (e.g. zen.exe).</div>
+        </div>
       </div>
       <label class="settings-check"><input type="checkbox" id="setNaviEnabled"> Navi clipboard paste into game</label>
       <label class="settings-check"><input type="checkbox" id="setNaviZen"> Require web browser foreground for Navi</label>
       <div class="settings-field">
-        <label>Setup cache</label>
-        <div class="help">Clears the saved first-time setup flag and opens the onboarding wizard again so you can re-pick your game process and web browser. Other settings (timing, keys, pass-through combos) are not changed until you finish the wizard.</div>
-        <button type="button" class="btn-primary" onclick="clearSetupCacheAndOnboard()">Clear setup cache</button>
-      </div>
-      <div class="settings-field">
-        <label>Primary macro toggle</label>
-        <div class="help">Keyboard shortcut that pauses or resumes every slot. Default is Ctrl+Down. Click Set, press your combo, then Confirm.</div>
-        <div class="settings-main-toggle-row">
-          <input type="hidden" id="setMainToggleAhk" value=''>
-          <div id="setMainToggleKbdHost" class="alt-pill-kbd"></div>
-          <button type="button" class="btn-primary" onclick="openMainToggleHotkeyCapture()">Set</button>
-        </div>
-      </div>
-      <div class="settings-field">
-        <label>Pass-through toggles</label>
-        <div class="help">Shortcuts pass through to the game and toggle macros on/off. Click Set, press your combo (for example Alt+Q), then Confirm.</div>
-        <div id="altSpecList"></div>
-        <button type="button" class="btn-primary btn-block" onclick="addAltSpecRow('')">Add combo</button>
-      </div>
-      <div class="settings-field">
         <label>Element overlays on game</label>
-        <div class="help">Square tiles on the game (this <strong>AutoHotkey</strong> process). Size is set above. Previews here stay small. Toggle applies immediately. <strong>X/Y</strong> update live while you drag a tile; you can also type coordinates and they apply after a short pause. Tiles <strong>hide automatically</strong> unless the <strong>target game</strong> window is the foreground (active) window. With Magpie fullscreen, z-order is refreshed ~12×/second. Tray: <strong>Show Earth element tile (test)</strong>.</div>
+        <div class="help">Square tiles on the game (this <strong>AutoHotkey</strong> process). Previews stay small. Toggle applies immediately. <strong>X/Y</strong> update live while you drag a tile; you can also type coordinates and they apply after a short pause. Tiles <strong>hide automatically</strong> unless the <strong>target game</strong> window is the foreground (active) window. With Magpie fullscreen, z-order is refreshed ~12×/second. Tray: <strong>Show Earth element tile (test)</strong>.</div>
+        <div class="settings-field element-overlay-size-field">
+          <label for="setElementOverlayBoxPx">Tile size (px)</label>
+          <input type="number" id="setElementOverlayBoxPx" min="24" max="400" step="1">
+        </div>
         <div class="element-overlay-grid">
           <div class="element-overlay-row"><span class="element-overlay-name">Earth</span><div class="element-overlay-tail"><span class="element-overlay-preview" style="background:#6D4C41;color:#F5E6D3"><span class="element-overlay-prev-water" aria-hidden="true">1</span><span class="element-overlay-prev-label">EART</span></span><div class="element-overlay-coords"><label class="coord-lab">X<input type="number" id="setOverlayEarthX" class="coord-inp" step="1" autocomplete="off"></label><label class="coord-lab">Y<input type="number" id="setOverlayEarthY" class="coord-inp" step="1" autocomplete="off"></label></div><input type="checkbox" id="setOverlayEarth" class="element-overlay-check" aria-label="Show Earth overlay"></div></div>
           <div class="element-overlay-row"><span class="element-overlay-name">Wind</span><div class="element-overlay-tail"><span class="element-overlay-preview" style="background:#0EA5E9;color:#082F49"><span class="element-overlay-prev-water" aria-hidden="true">2</span><span class="element-overlay-prev-label">WIND</span></span><div class="element-overlay-coords"><label class="coord-lab">X<input type="number" id="setOverlayWindX" class="coord-inp" step="1" autocomplete="off"></label><label class="coord-lab">Y<input type="number" id="setOverlayWindY" class="coord-inp" step="1" autocomplete="off"></label></div><input type="checkbox" id="setOverlayWind" class="element-overlay-check" aria-label="Show Wind overlay"></div></div>
@@ -3867,6 +3724,17 @@ body.onboarding .titlebar-win #btnViewToggle { visibility: hidden; }
           <div class="element-overlay-row"><span class="element-overlay-name">Holy</span><div class="element-overlay-tail"><span class="element-overlay-preview" style="background:#CA8A04;color:#1C1917"><span class="element-overlay-prev-water" aria-hidden="true">7</span><span class="element-overlay-prev-label">HOLY</span></span><div class="element-overlay-coords"><label class="coord-lab">X<input type="number" id="setOverlayHolyX" class="coord-inp" step="1" autocomplete="off"></label><label class="coord-lab">Y<input type="number" id="setOverlayHolyY" class="coord-inp" step="1" autocomplete="off"></label></div><input type="checkbox" id="setOverlayHoly" class="element-overlay-check" aria-label="Show Holy overlay"></div></div>
         </div>
       </div>
+      <div class="settings-field settings-hud-top-field">
+        <div class="settings-hud-top-head">
+          <div class="settings-hud-top-copy">
+            <span class="settings-inline-label">Setup cache</span>
+            <div class="help">Clears saved first-time setup and runs the onboarding wizard again the next time you open this HUD.</div>
+          </div>
+          <div class="settings-hud-top-switch settings-hud-top-actions">
+            <button type="button" class="btn-primary" onclick="clearSetupCacheAndOnboard()">Clear setup cache</button>
+          </div>
+        </div>
+      </div>
       <p class="settings-autosave-hint">Settings apply automatically when you change them.</p>
     </div>
 </div>
@@ -3875,7 +3743,7 @@ body.onboarding .titlebar-win #btnViewToggle { visibility: hidden; }
 <div id="altHotkeyCaptureModal" class="modal-cap hidden" role="dialog" aria-modal="true" aria-labelledby="altCapTitle" aria-hidden="true" onclick="if(event.target===this)closeAltHotkeyCapture()">
   <div class="modal-cap-backdrop" onclick="closeAltHotkeyCapture()"></div>
   <div class="modal-cap-card" tabindex="-1">
-    <div class="modal-cap-title" id="altCapTitle">Set pass-through shortcut</div>
+    <div class="modal-cap-title" id="altCapTitle">Set shortcut</div>
     <p class="modal-cap-sub">Press the key combination you want. Esc cancels.</p>
     <div id="altCapturePreview" class="alt-capture-preview" aria-live="polite"></div>
     <p id="altCaptureErr" class="alt-capture-err hidden"></p>
@@ -3889,7 +3757,6 @@ body.onboarding .titlebar-win #btnViewToggle { visibility: hidden; }
 <script>
 var listeningSlot = null;
 window.altHotkeyCaptureActive = false;
-window.altCaptureTargetRow = null;
 window.altCapturePendingSpec = null;
 window.lastState = null;
 var settingsOpen = false;
@@ -4548,7 +4415,6 @@ function notifyCaptureHotkeyUi(active) {
 function closeAltHotkeyCapture() {
   notifyCaptureHotkeyUi(false);
   window.altHotkeyCaptureActive = false;
-  window.altCaptureTargetRow = null;
   window.altCapturePendingSpec = null;
   window.hotkeyCaptureKind = '';
   var modal = document.getElementById('altHotkeyCaptureModal');
@@ -4567,35 +4433,8 @@ function closeAltHotkeyCapture() {
   if (conf) conf.disabled = true;
 }
 
-function openAltHotkeyCapture(row) {
-  window.hotkeyCaptureKind = 'alt';
-  window.altCaptureTargetRow = row;
-  window.altCapturePendingSpec = null;
-  window.altHotkeyCaptureActive = true;
-  var modal0 = document.getElementById('altHotkeyCaptureModal');
-  var tit = document.getElementById('altCapTitle');
-  var sub0 = modal0 ? modal0.querySelector('.modal-cap-sub') : null;
-  if (tit) tit.textContent = 'Set pass-through shortcut';
-  if (sub0) sub0.textContent = 'Press the key combination you want. Esc cancels.';
-  var prev = document.getElementById('altCapturePreview');
-  if (prev) prev.innerHTML = '<span class="kbd-muted">Waiting\u2026</span>';
-  var err = document.getElementById('altCaptureErr');
-  if (err) err.classList.add('hidden');
-  var conf = document.getElementById('altCaptureConfirm');
-  if (conf) conf.disabled = true;
-  var modal = document.getElementById('altHotkeyCaptureModal');
-  if (modal) {
-    modal.classList.remove('hidden');
-    modal.setAttribute('aria-hidden', 'false');
-  }
-  var card = document.querySelector('.modal-cap-card');
-  if (card) card.focus();
-  notifyCaptureHotkeyUi(true);
-}
-
 function openMainToggleHotkeyCapture() {
   window.hotkeyCaptureKind = 'main';
-  window.altCaptureTargetRow = null;
   window.altCapturePendingSpec = null;
   window.altHotkeyCaptureActive = true;
   var modal = document.getElementById('altHotkeyCaptureModal');
@@ -4622,7 +4461,6 @@ function openMainToggleHotkeyCapture() {
 
 function openMainToggleCaptureForOnboarding() {
   window.hotkeyCaptureKind = 'mainOnboarding';
-  window.altCaptureTargetRow = null;
   window.altCapturePendingSpec = null;
   window.altHotkeyCaptureActive = true;
   var modal = document.getElementById('altHotkeyCaptureModal');
@@ -4646,39 +4484,10 @@ function openMainToggleCaptureForOnboarding() {
   notifyCaptureHotkeyUi(true);
 }
 
-function altAhkSpecUsedElsewhere(ahk, row) {
-  var rows = document.querySelectorAll('.alt-spec-ahk');
-  var want = String(ahk || '').trim().toLowerCase();
-  for (var i = 0; i < rows.length; i++) {
-    var r = rows[i].closest('.alt-spec-row');
-    if (r === row) continue;
-    if (String(rows[i].value || '').trim().toLowerCase() === want) return true;
-  }
-  return false;
-}
-
 function confirmHotkeyCapture() {
   var spec = window.altCapturePendingSpec;
   if (!spec) return;
-  var kind = window.hotkeyCaptureKind || 'alt';
-  if (kind === 'alt') {
-    var row = window.altCaptureTargetRow;
-    if (!row) return;
-    if (altAhkSpecUsedElsewhere(spec, row)) {
-      var err = document.getElementById('altCaptureErr');
-      if (err) {
-        err.textContent = 'That shortcut is already listed.';
-        err.classList.remove('hidden');
-      }
-      return;
-    }
-    var hid = row.querySelector('.alt-spec-ahk');
-    if (hid) hid.value = spec;
-    renderAltSpecRowDisplay(row);
-    closeAltHotkeyCapture();
-    schedulePersistSettings(80);
-    return;
-  }
+  var kind = window.hotkeyCaptureKind || '';
   if (kind === 'main') {
     var hidm = document.getElementById('setMainToggleAhk');
     if (hidm) hidm.value = spec;
@@ -4706,28 +4515,11 @@ function altHotkeyCaptureOnKeydown(ev) {
   }
   if (ev.repeat) return;
   if (ev.key === 'Control' || ev.key === 'Shift' || ev.key === 'Alt' || ev.key === 'Meta') return;
-  var kind = window.hotkeyCaptureKind || 'alt';
-  var useMain = kind === 'main' || kind === 'mainOnboarding';
-  var modCount = (ev.altKey ? 1 : 0) + (ev.ctrlKey ? 1 : 0) + (ev.shiftKey ? 1 : 0) + (ev.metaKey ? 1 : 0);
-  var spec;
-  if (useMain) {
-    spec = buildMainToggleSpecFromEvent(ev);
-  } else {
-    if (!modCount) {
-      if (errEl) {
-        errEl.textContent = 'Hold a modifier (Alt, Ctrl, Shift, or Win) with your key.';
-        errEl.classList.remove('hidden');
-      }
-      if (conf) conf.disabled = true;
-      return;
-    }
-    spec = buildAltPassthroughFromEvent(ev);
-  }
+  var spec = buildMainToggleSpecFromEvent(ev);
   if (spec === 'BADKEY') {
     if (errEl) {
-      errEl.textContent = useMain
-        ? 'That key is not supported here. Try with a modifier, or F1–F12, arrows, Space, Tab, or Enter.'
-        : 'That key is not supported. Try letters, digits, F1–F12, or arrows / Space / Tab / Enter.';
+      errEl.textContent =
+        'That key is not supported here. Try with a modifier, or F1–F12, arrows, Space, Tab, or Enter.';
       errEl.classList.remove('hidden');
     }
     if (conf) conf.disabled = true;
@@ -4739,13 +4531,6 @@ function altHotkeyCaptureOnKeydown(ev) {
   if (conf) conf.disabled = false;
 }
 
-function renderAltSpecRowDisplay(row) {
-  var hid = row.querySelector('.alt-spec-ahk');
-  var host = row.querySelector('.alt-spec-kbd-host');
-  if (!hid || !host) return;
-  host.innerHTML = formatToggleSpecAsKbdHtml(hid.value);
-}
-
 function renderMainToggleKbdHost() {
   var hid = document.getElementById('setMainToggleAhk');
   var host = document.getElementById('setMainToggleKbdHost');
@@ -4753,71 +4538,18 @@ function renderMainToggleKbdHost() {
   host.innerHTML = formatToggleSpecAsKbdHtml(hid.value || '^Down', true);
 }
 
+function syncMainToggleHudFromState(state) {
+  var host = document.getElementById('mainToggleKbdHost');
+  if (!host) return;
+  var spec = state && state.mainToggleHotkey ? state.mainToggleHotkey : '^Down';
+  host.innerHTML = formatToggleSpecAsKbdHtml(spec, true);
+}
+
 function refreshObMainTogglePreview() {
   var host = document.getElementById('obMainToggleKbdHost');
   if (!host) return;
   var spec = window.obMainToggleAhk || '^Down';
   host.innerHTML = formatToggleSpecAsKbdHtml(spec, true);
-}
-
-function rebuildTogglePills(state) {
-  var pill = document.getElementById('togglePills');
-  if (!pill) return;
-  var primary = state && state.mainToggleHotkey ? state.mainToggleHotkey : '^Down';
-  var html = '<div class="seg shrink alt-pill-kbd toggle-primary-kbd">' + formatToggleSpecAsKbdHtml(primary, true) + '</div>';
-  if (state.altPassthrough && state.altPassthrough.length) {
-    for (var i = 0; i < state.altPassthrough.length; i++) {
-      html +=
-        '<div class="seg shrink alt-pill-kbd">' +
-        formatToggleSpecAsKbdHtml(state.altPassthrough[i], true) +
-        '</div>';
-    }
-  }
-  pill.innerHTML = html;
-}
-
-function addAltSpecRow(val) {
-  var list = document.getElementById('altSpecList');
-  var row = document.createElement('div');
-  row.className = 'alt-spec-row';
-  var hid = document.createElement('input');
-  hid.type = 'hidden';
-  hid.className = 'alt-spec-ahk';
-  hid.value = val || '';
-  var host = document.createElement('div');
-  host.className = 'alt-spec-kbd-host';
-  host.innerHTML = formatToggleSpecAsKbdHtml(val || '');
-  var btnSet = document.createElement('button');
-  btnSet.type = 'button';
-  btnSet.className = 'alt-spec-set';
-  btnSet.textContent = 'Set';
-  btnSet.onclick = function() {
-    openAltHotkeyCapture(row);
-  };
-  var btnRm = document.createElement('button');
-  btnRm.type = 'button';
-  btnRm.className = 'alt-spec-rm';
-  btnRm.textContent = 'Remove';
-  btnRm.onclick = function() {
-    row.remove();
-    schedulePersistSettings(120);
-  };
-  row.appendChild(hid);
-  row.appendChild(host);
-  row.appendChild(btnSet);
-  row.appendChild(btnRm);
-  list.appendChild(row);
-  schedulePersistSettings(120);
-}
-
-function altSpecsFromList() {
-  var rows = document.querySelectorAll('.alt-spec-ahk');
-  var out = [];
-  for (var i = 0; i < rows.length; i++) {
-    var t = rows[i].value.trim();
-    if (t) out.push(t);
-  }
-  return out;
 }
 
 function enterConfirmMs(state) {
@@ -4965,8 +4697,27 @@ function syncHudAlwaysOnTopSwitchFromState(state) {
   el.setAttribute('aria-checked', on ? 'true' : 'false');
 }
 
+function syncEnterTogglesMacrosSwitchFromState(state) {
+  var el = document.getElementById('setEnterTogglesMacrosSwitch');
+  if (!el) return;
+  var on = !!state.enterTogglesMacros;
+  el.classList.toggle('is-on', on);
+  el.classList.toggle('is-off', !on);
+  el.setAttribute('aria-checked', on ? 'true' : 'false');
+}
+
 function toggleHudAlwaysOnTopSwitch() {
   var el = document.getElementById('setHudAlwaysOnTopSwitch');
+  if (!el) return;
+  var on = !el.classList.contains('is-on');
+  el.classList.toggle('is-on', on);
+  el.classList.toggle('is-off', !on);
+  el.setAttribute('aria-checked', on ? 'true' : 'false');
+  persistSettingsNow();
+}
+
+function toggleEnterTogglesMacrosSwitch() {
+  var el = document.getElementById('setEnterTogglesMacrosSwitch');
   if (!el) return;
   var on = !el.classList.contains('is-on');
   el.classList.toggle('is-on', on);
@@ -4980,6 +4731,7 @@ window._persistSettingsTimer = null;
 
 function buildSettingsPayloadFromDom() {
   var swTop = document.getElementById('setHudAlwaysOnTopSwitch');
+  var swEnter = document.getElementById('setEnterTogglesMacrosSwitch');
   var bx = document.getElementById('setElementOverlayBoxPx');
   var boxPx = bx ? parseInt(bx.value, 10) : 50;
   if (!isFinite(boxPx)) boxPx = 50;
@@ -4989,13 +4741,12 @@ function buildSettingsPayloadFromDom() {
     spamDelay: parseInt(document.getElementById('setSpamDelay').value, 10) || 80,
     spamJitter: parseInt(document.getElementById('setJitter').value, 10) || 0,
     enterConfirmDelay: parseInt(document.getElementById('setEnterConfirm').value, 10) || 0,
-    spamHoldDelayMs: parseInt(document.getElementById('setHoldDelay').value, 10) || 0,
+    enterTogglesMacros: !!(swEnter && swEnter.classList.contains('is-on')),
     targetProcess: document.getElementById('setTargetExe').value.trim() || 'dw-ro.exe',
     zenBrowserExe: document.getElementById('setZenExe').value.trim() || 'zen.exe',
     naviClipboardEnabled: document.getElementById('setNaviEnabled').checked,
     naviRequireZen: document.getElementById('setNaviZen').checked,
     mainToggleHotkey: (document.getElementById('setMainToggleAhk') && document.getElementById('setMainToggleAhk').value.trim()) || '^Down',
-    altPassthrough: altSpecsFromList(),
     overlayEarth: document.getElementById('setOverlayEarth').checked,
     overlayWind: document.getElementById('setOverlayWind').checked,
     overlayWater: document.getElementById('setOverlayWater').checked,
@@ -5010,7 +4761,6 @@ function buildSettingsPayloadFromDom() {
     var sw = document.getElementById('slotModeSwitch' + c);
     payload['slotMode' + c] = sw && sw.classList.contains('is-enter') ? 'enter_after' : 'spam';
   }
-  if (!payload.altPassthrough.length) payload.altPassthrough = ['!e', '!q', '!z'];
   return payload;
 }
 
@@ -5048,9 +4798,11 @@ function initSettingsAutoSave() {
   function ignoreTarget(t) {
     if (!t) return true;
     if (t.closest && t.closest('#setHudAlwaysOnTopSwitch')) return true;
+    if (t.closest && t.closest('#setEnterTogglesMacrosSwitch')) return true;
     if (t.id && /^slotModeSwitch/.test(t.id)) return true;
     if (!t.id) return false;
     if (t.id === 'setHudAlwaysOnTopSwitch') return true;
+    if (t.id === 'setEnterTogglesMacrosSwitch') return true;
     if (/^setOverlay(Earth|Wind|Water|Fire|Ghost|Shadow|Holy)$/.test(t.id)) return true;
     if (/^setOverlay(Earth|Wind|Water|Fire|Ghost|Shadow|Holy)[XY]$/.test(t.id)) return true;
     return false;
@@ -5069,6 +4821,7 @@ function initSettingsAutoSave() {
 
 function populateSettingsFromState(state) {
   window.roSuppressSettingsPersist = true;
+  syncEnterTogglesMacrosSwitchFromState(state);
   syncHudAlwaysOnTopSwitchFromState(state);
   var bx = document.getElementById('setElementOverlayBoxPx');
   if (bx) {
@@ -5079,7 +4832,6 @@ function populateSettingsFromState(state) {
   }
   document.getElementById('setSpamDelay').value = state.spamDelay;
   document.getElementById('setJitter').value = state.spamJitter;
-  document.getElementById('setHoldDelay').value = state.spamHoldDelayMs != null ? state.spamHoldDelayMs : 100;
   document.getElementById('setEnterConfirm').value = enterConfirmMs(state);
   document.getElementById('setTargetExe').value = state.targetProcess || '';
   document.getElementById('setZenExe').value = state.zenBrowserExe || 'zen.exe';
@@ -5093,10 +4845,6 @@ function populateSettingsFromState(state) {
     var ch = slots[si];
     setSlotBehaviorSwitch(ch, state['slotMode' + ch] === 'enter_after' ? 'enter_after' : 'spam');
   }
-  var list = document.getElementById('altSpecList');
-  list.innerHTML = '';
-  var specs = (state.altPassthrough && state.altPassthrough.length) ? state.altPassthrough : ['!e', '!q', '!z'];
-  for (var j = 0; j < specs.length; j++) addAltSpecRow(specs[j]);
   var ov = [['setOverlayEarth','overlayEarth'],['setOverlayWind','overlayWind'],['setOverlayWater','overlayWater'],['setOverlayFire','overlayFire'],['setOverlayGhost','overlayGhost'],['setOverlayShadow','overlayShadow'],['setOverlayHoly','overlayHoly']];
   for (var oi = 0; oi < ov.length; oi++) {
     var oel = document.getElementById(ov[oi][0]);
@@ -5143,8 +4891,9 @@ window.updateState = function(state) {
     window.updateGamePing(state.gamePingMs, state.gamePingHost);
   document.getElementById('delayKeyPress').textContent = state.spamDelay + ' ms';
   document.getElementById('jitterVal').textContent = '\u00B1' + state.spamJitter + ' ms';
-  document.getElementById('delayHold').textContent = (state.spamHoldDelayMs != null ? state.spamHoldDelayMs : 100) + ' ms';
-  rebuildTogglePills(state);
+  if (document.getElementById('setEnterTogglesMacrosSwitch')) syncEnterTogglesMacrosSwitchFromState(state);
+  if (document.getElementById('setHudAlwaysOnTopSwitch')) syncHudAlwaysOnTopSwitchFromState(state);
+  syncMainToggleHudFromState(state);
   updateKey('qBtn', !!state.qEnabled, state.qEnabled ? slotActiveBottomLabel('Q', state) : 'OFF', state.qKeyDisplay);
   updateKey('wBtn', !!state.wEnabled, state.wEnabled ? slotActiveBottomLabel('W', state) : 'OFF', state.wKeyDisplay);
   updateKey('eBtn', !!state.eEnabled, state.eEnabled ? slotActiveBottomLabel('E', state) : 'OFF', state.eKeyDisplay);
@@ -5179,7 +4928,7 @@ ahk.global.GetStateJSON().then(function(json) {
     WVGui.AddTextRoute("index.html", indexHtml)
 
     WVGui.Navigate("index.html")
-    WVGui.Show(Format("x{1} y{2} w380 h331 NA", HudX, HudY))
+    WVGui.Show(Format("x{1} y{2} w380 h341 NA", HudX, HudY))
     ApplyHudAlwaysOnTop()
     ApplyShellIcons(WVGui)
     SetTimer(RefreshElementOverlayGuis, -400)
@@ -5193,6 +4942,46 @@ MainToggleHotkeyHandler(*) {
     if CaptureHotkeyUiActive
         return
     SetMacrosEnabled(!MacrosEnabled)
+}
+
+
+EnterMacroToggleAllowed(*) {
+    global EnterTogglesMacros, TargetProcess, CaptureHotkeyUiActive
+
+    if CaptureHotkeyUiActive
+        return false
+    if !EnterTogglesMacros
+        return false
+    if !WinActive("ahk_exe " TargetProcess)
+        return false
+    return true
+}
+
+
+EnterMacroTogglePressed(*) {
+    global MacrosEnabled, CaptureHotkeyUiActive
+
+    if CaptureHotkeyUiActive
+        return
+    SetMacrosEnabled(!MacrosEnabled)
+}
+
+
+RegisterEnterMacroToggleHotkey() {
+    global EnterTogglesMacros, RegisteredEnterToggleHotif
+
+    if RegisteredEnterToggleHotif is Func {
+        HotIf RegisteredEnterToggleHotif
+        try Hotkey "~$Enter", "Off"
+        HotIf
+    }
+    RegisteredEnterToggleHotif := false
+    if !EnterTogglesMacros
+        return
+    RegisteredEnterToggleHotif := EnterMacroToggleAllowed
+    HotIf RegisteredEnterToggleHotif
+    try Hotkey "~$Enter", EnterMacroTogglePressed, "On"
+    HotIf
 }
 
 
@@ -5223,9 +5012,8 @@ RegisterMainToggleHotkey() {
 
 
 ; Primary macro toggle is registered dynamically — see RegisterMainToggleHotkey().
-
-
-; Secondary toggles (Alt+key etc.) are registered from INI via RegisterAltPassthroughHotkeys().
+; Enter in the target game toggles macros when enabled in settings — see RegisterEnterMacroToggleHotkey().
+; Macro slot hotkeys use ~$* so keys pass through to the game while the handler runs.
 
 
 ; Declare these expressions so dynamic HotIf registrations can reference them.
@@ -5293,16 +5081,12 @@ MacroHotkeyAllowed(slot) {
     if GetKeyState("Shift", "P")
         return false
 
-    ; Let configured modifier combos act only as secondary state toggles (pass-through hotkeys).
-    if IsPassthroughComboBlockingSlot(slot)
-        return false
-
     return true
 }
 
 
 MacroHotkeyPressed(slot, *) {
-    global SpamDelay, EnterConfirmDelay, SpamHoldDelayMs, KeyBindings, SlotBehaviors
+    global SpamDelay, EnterConfirmDelay, KeyBindings, SlotBehaviors
 
     if !MacroHotkeyAllowed(slot)
         return
@@ -5322,7 +5106,6 @@ MacroHotkeyPressed(slot, *) {
     spamMs := SpamDelay
 
     SendBoundKey(slot)
-    Sleep SpamHoldDelayMs
     if !MacroHotkeyAllowed(slot)
         return
 
