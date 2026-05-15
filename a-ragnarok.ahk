@@ -2,6 +2,8 @@
 #SingleInstance Force
 Persistent
 InstallKeybdHook()
+; When compiling with Ahk2Exe, embed the green circle icon as the .exe icon.
+;@Ahk2Exe-SetMainIcon assets\ro-macro-on.ico
 
 #Include Lib\WebViewToo.ahk
 
@@ -124,18 +126,43 @@ return
 
 
 ApplyShellIcons(g := 0) {
+    static HudIconSmall := 0, HudIconBig := 0
     global MacrosEnabled
+
     dir := A_ScriptDir "\assets\"
     ico := MacrosEnabled ? (dir "ro-macro-on.ico") : (dir "ro-macro-off.ico")
     dll := A_WinDir "\System32\imageres.dll"
     if FileExist(ico) {
         try TraySetIcon(ico)
-        if IsObject(g)
-            try g.SetIcon(ico)
     } else {
         try TraySetIcon(dll, 1)
-        if IsObject(g)
-            try g.SetIcon(dll, 1)
+    }
+
+    if !IsObject(g)
+        return
+
+    imgType := 0
+    if FileExist(ico) {
+        newSm := LoadPicture(ico, "Icon1 w32 h32", &imgType)
+        newLg := LoadPicture(ico, "Icon1 w256 h256", &imgType)
+    } else {
+        newSm := LoadPicture(dll, "Icon1 w32 h32", &imgType)
+        newLg := LoadPicture(dll, "Icon1 w48 h48", &imgType)
+    }
+
+    try {
+        if newSm {
+            prev := SendMessage(0x80, 0, newSm, g)
+            if prev && prev = HudIconSmall
+                DllCall("DestroyIcon", "ptr", prev)
+            HudIconSmall := newSm
+        }
+        if newLg {
+            prev := SendMessage(0x80, 1, newLg, g)
+            if prev && prev = HudIconBig
+                DllCall("DestroyIcon", "ptr", prev)
+            HudIconBig := newLg
+        }
     }
 }
 
